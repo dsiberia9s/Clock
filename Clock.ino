@@ -1,18 +1,122 @@
 #include <M5Stack.h>
+#include "SPIFFS.h"
+#include "FS.h"
+#include "arduinoFFT.h" // https://github.com/kosme/arduinoFFT
 
-uint8_t conv2d(const char * p) {
-  uint8_t v = 0;
-  if ('0' <= *p && *p <= '9')
-    v = *p - '0';
-  return 10 * v + *++p - '0';
+#define SIGNAL_LENGTH 512
+#define M5STACKFIRE_MICROPHONE_PIN 34
+#define M5STACKFIRE_SPEAKER_PIN 25 // speaker DAC, only 8 Bit
+#define SAMPLINGFREQUENCY 40000
+#define SAMPLING_TIME_US (1000000UL/SAMPLINGFREQUENCY)
+#define ANALOG_SIGNAL_INPUT M5STACKFIRE_MICROPHONE_PIN
+
+arduinoFFT FFT = arduinoFFT(); /* Create FFT object */
+
+double adcBuffer[SIGNAL_LENGTH];
+double vImag[SIGNAL_LENGTH];
+double AdcMeanValue = 0;
+
+int H, M, S;
+
+int fft() {
+  int n;
+  uint32_t nextTime = 0;
+  for (n = 1; n < SIGNAL_LENGTH; n++) {
+    double v = analogRead( ANALOG_SIGNAL_INPUT );
+    AdcMeanValue += (v - AdcMeanValue) * 0.001;
+    adcBuffer[n] = v - AdcMeanValue;
+    
+    while (micros() < nextTime);
+    nextTime = micros() + SAMPLING_TIME_US;
+  }
+
+  FFT.Windowing(adcBuffer, SIGNAL_LENGTH, FFT_WIN_TYP_HAMMING, FFT_FORWARD);
+  FFT.Compute(adcBuffer, vImag, SIGNAL_LENGTH, FFT_FORWARD);
+  FFT.ComplexToMagnitude(adcBuffer, vImag, SIGNAL_LENGTH);
+  int x = FFT.MajorPeak(adcBuffer, SIGNAL_LENGTH, SAMPLINGFREQUENCY);
+
+  int maxAmplitudeDB = 0;
+  for (n = 1; n < SIGNAL_LENGTH; n++) {
+    int a = log10(adcBuffer[n]) * 20 - 54.186;
+    if (a > maxAmplitudeDB) maxAmplitudeDB = a;
+    adcBuffer[n] = (a + 30) * 5;
+    vImag[n] = 0;
+  }
+
+  //a = maxAmplitudeDB;
+  return x;
 }
 
-uint8_t H = conv2d(__TIME__), M = conv2d(__TIME__+3), S = conv2d(__TIME__+6);
+void jjy() {
+  unsigned long t  = 0;
+  unsigned long t1;
+  int f;
+  char pre = ' ';
+  bool T[17];
+  int Tb = 0;
+  bool r = false;
+  while (true) {
+    t1 = millis();
+    f = fft();
+    if (f > 12000) {
+      t += millis() - t1;
+    } else {
+      if (t) {
+        if ((t > 100) && (t < 250)) {
+          if (pre == 'M') {
+            r = true;
+          }
+          pre = 'M';
+          M5.Lcd.setTextColor(TFT_RED);
+        } else if ((t > 400) && (t < 600)) {
+          if (r) {
+            T[Tb] = true;
+            Tb++;
+          }
+          pre = '1';
+          M5.Lcd.setTextColor(TFT_YELLOW);
+        } else if ((t > 700) && (t < 900)) {
+          if (r) {
+            T[Tb] = false;
+            Tb++;
+          }
+          pre = '0';          
+          M5.Lcd.setTextColor(TFT_GREEN);
+        }
+        if (Tb > 16) {
+          Tb = 0;
+          r = false;
+          M = 0;
+          H = 0;
+          S = 0;
+          M = (T[0]) ? M + 40 : M;
+          M = (T[1]) ? M + 20 : M;
+          M = (T[2]) ? M + 10 : M;
+          M = (T[4]) ? M + 8 : M;
+          M = (T[5]) ? M + 4 : M;
+          M = (T[6]) ? M + 2 : M;
+          M = (T[7]) ? M + 1 : M;
+          H = (T[10]) ? H + 20 : H;
+          H = (T[11]) ? H + 10 : H;
+          H = (T[13]) ? H + 8 : H;
+          H = (T[14]) ? H + 4 : H;
+          H = (T[15]) ? H + 2 : H;
+          H = (T[16]) ? H + 1 : H;
+          S = 20;
+          //M5.Lcd.setTextColor(TFT_WHITE);
+          //M5.Lcd.print(H);M5.Lcd.print(":");M5.Lcd.print(M);
+        }
+        //M5.Lcd.print("* ");
+      }
+      t = 0;
+    }
+  }
+}
 
 void Clock(int bgColor, int X, int Y, int R, int H, int M, int S) {
   M5.Lcd.drawCircle(X, Y, R, TFT_WHITE);
   M5.Lcd.drawCircle(X, Y, R - 1, TFT_WHITE);
-  M5.Lcd.drawCircle(X, Y, R - 2, TFT_WHITE);
+  M5.Lcd.fillCircle(X, Y, R - 2, bgColor);
 
   H = (H < 0) ? 0 : H;
   H = (H > 12) ? H - 12 : H;
@@ -73,23 +177,34 @@ void Clock(int bgColor, int X, int Y, int R, int H, int M, int S) {
   M5.Lcd.drawLine(S_osx, S_osy, X, Y, TFT_RED);
 }
 
+void watch(void * pvParameters) {
+  unsigned long previousMillis = 0;
+  while (true) {
+    unsigned long d = millis() - previousMillis;
+    if (d >= 1000) {
+      S += d / 1000;
+      M = (S > 59) ? M + 1 : M;
+      H = (M > 59) ? H + 1 : H;
+      S = (S > 59) ? 0 : S;
+      M = (M > 59) ? 0 : M;
+      H = (H > 24) ? 0 : H;
+      Clock(16716, 285, 55, 26, H, M, S);
+      previousMillis = millis();
+    }
+    delay(5);
+  }
+}
+  
+
 void setup(void) {
   M5.begin();
   SPIFFS.begin(true);
+  dacWrite(M5STACKFIRE_SPEAKER_PIN, 0);
   M5.Lcd.fillScreen(16716);
+  xTaskCreatePinnedToCore(watch, "watch", 4096, NULL, 1, NULL, 1);
+  M5.Lcd.drawJpgFile(SPIFFS, "/wallpapers.jpg", 0, 0);
 }
 
-unsigned long previousMillis = 0;
-
 void loop() {
-  if (millis() - previousMillis >= 1000) {
-    S++;
-    M = (S > 59) ? M + 1 : M;
-    H = (M > 59) ? H + 1 : H;
-    S = (S > 59) ? 0 : S;
-    M = (M > 59) ? 0 : M;
-    H = (H > 24) ? 0 : H;
-    Clock(16716, 285, 55, 26, H, M, S);
-    previousMillis = millis();
-  }
+  jjy();
 }
