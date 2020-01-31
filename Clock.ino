@@ -102,7 +102,7 @@ void jjy() {
           H = (T[14]) ? H + 4 : H;
           H = (T[15]) ? H + 2 : H;
           H = (T[16]) ? H + 1 : H;
-          S = 20;
+          S = 19;
           //M5.Lcd.setTextColor(TFT_WHITE);
           //M5.Lcd.print(H);M5.Lcd.print(":");M5.Lcd.print(M);
         }
