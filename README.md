@@ -1,4 +1,4 @@
-# **![](https://habrastorage.org/webt/z4/i9/mk/z4i9mk0fqopeehdivctzq2srewe.jpeg)**
+# **![](https://raw.githubusercontent.com/dsiberia9s/M5Stack_JJY_Clock/master/photo.jpg)**
 
 **[по-русски]**
 
